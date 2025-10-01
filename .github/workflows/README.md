@@ -1,56 +1,46 @@
 # GitHub Actions Workflows Documentation
 
-This directory contains GitHub Actions workflows and documentation on how they are used within this project.
+This directory contains reusable GitHub Actions workflows and documentation on how they are used within this project.
 
-## Branching Model for Terraform Deployments
+## Reusable Terraform Workflow (`terraform.yml`)
 
-To ensure consistent and automated deployments of Terraform configurations, a specific branching model is followed to determine the target project, environment, and working directory.
+The `terraform.yml` workflow is designed to be a **reusable workflow** that can be called by other GitHub Actions workflows in different repositories. It encapsulates the common steps for Terraform linting, security scanning, validation, and planning.
 
-### 1. Customer-Specific Projects
+### Inputs
 
-For Terraform configurations related to individual customer projects, the branch names must follow this format:
+When calling this workflow, the following inputs are required:
 
-`customer-<customer_id>-<environment>-<jira_ticket_id>`
+*   `working_directory`:
+    *   Description: The working directory to run Terraform commands from (e.g., `infrastructure/terraform/modules/customer-project`).
+    *   Required: `true`
+    *   Type: `string`
+*   `environment`:
+    *   Description: The environment to target (e.g., `production`, `staging`).
+    *   Required: `true`
+    *   Type: `string`
+*   `tfvars_project_name`:
+    *   Description: The name of the project in the environments directory (e.g., `customer-abc19a39`).
+    *   Required: `true`
+    *   Type: `string`
+*   `gcp_project_id`:
+    *   Description: The target Google Cloud Project ID (e.g., `caddi-us-c-abc19a39-prd`).
+    *   Required: `true`
+    *   Type: `string`
 
-*   `<customer_id>`: This segment identifies the unique customer (e.g., `abc19a39`). This will be used to derive the `tfvars_project_name`.
-*   `<environment>`: This segment specifies the deployment environment (e.g., `staging`, `production`). This will be used to derive the `environment`.
-*   `<jira_ticket_id>`: This segment is for the associated Jira ticket (e.g., `JIRA-123`). This part of the branch name is not used for deriving `tfvars_project_name` or `environment`.
+### Secrets
 
-**Example Branch Names:**
-*   `customer-abc19a39-staging-JIRA-456`
-*   `customer-abc19a39-production-JIRA-789`
+*   `GCP_SA_KEY`:
+    *   Description: Google Cloud Platform service account key in JSON format, required for authentication.
+    *   Required: `true`
 
-**Derived Values:**
-*   `tfvars_project_name`: `customer-<customer_id>` (e.g., `customer-abc19a39`)
-*   `environment`: `<environment>` (e.g., `staging`)
-*   `working_directory`: `infrastructure/terraform/modules/customer-project`
+### How to Call the Reusable Workflow
 
-### 2. Shared Infrastructure Projects
+To use this reusable workflow in another repository (e.g., your `terraform-monorepo`), you would create a new workflow file (e.g., `.github/workflows/deploy-terraform.yml`) that includes the logic to derive `working_directory`, `environment`, `tfvars_project_name`, and `gcp_project_id` from your branch naming convention. This calling workflow would then pass these values as inputs to `terraform.yml`.
 
-For Terraform configurations related to shared infrastructure components, the branch names must follow this format:
-
-`shared-<environment>-<jira_ticket_id>`
-
-*   `<environment>`: This segment specifies the deployment environment (e.g., `dev`, `staging`, `production`). This will be used to derive the `environment`.
-*   `<jira_ticket_id>`: This segment is for the associated Jira ticket (e.g., `JIRA-123`). This part of the branch name is not used for deriving `tfvars_project_name` or `environment`.
-
-**Example Branch Names:**
-*   `shared-dev-JIRA-101`
-*   `shared-staging-JIRA-102`
-
-**Derived Values:**
-*   `tfvars_project_name`: `shared-infrastructure` (fixed value)
-*   `environment`: `<environment>` (e.g., `dev`)
-*   `working_directory`: `infrastructure/terraform/modules/shared-infrastructure`
-
-## Workflow (`terraform.yml`)
-
-The `terraform.yml` workflow is a self-contained workflow that automatically extracts the `tfvars_project_name`, `environment`, and `working_directory` based on the branch name using bash scripting and regular expressions. This workflow is triggered on pushes to branches matching the defined branching model. It then proceeds to run `tfsec`, `tflint`, `terraform fmt`, `terraform validate`, and `terraform plan`.
-
-### Example from `terraform.yml`:
+Here's an example of a calling workflow:
 
 ```yaml
-name: Terraform Reusable Workflow
+name: Deploy Terraform Infrastructure
 
 on:
   push:
@@ -65,6 +55,7 @@ jobs:
       tfvars_project_name: ${{ steps.extract.outputs.tfvars_project_name }}
       environment: ${{ steps.extract.outputs.environment }}
       working_directory: ${{ steps.extract.outputs.working_directory }}
+      gcp_project_id: ${{ steps.extract.outputs.gcp_project_id }}
     steps:
       - name: Extract branch info
         id: extract
@@ -75,16 +66,20 @@ jobs:
           TFVARS_PROJECT_NAME=""
           ENVIRONMENT=""
           WORKING_DIRECTORY=""
+          GCP_PROJECT_ID=""
 
           if [[ $BRANCH_NAME =~ ^customer-([a-zA-Z0-9-]+)-([a-zA-Z0-9-]+)-([a-zA-Z0-9-]+)$ ]]; then
-            TFVARS_PROJECT_NAME="customer-${BASH_REMATCH[1]}"
+            CUSTOMER_ID="${BASH_REMATCH[1]}"
             ENVIRONMENT="${BASH_REMATCH[2]}"
+            TFVARS_PROJECT_NAME="customer-$CUSTOMER_ID"
             WORKING_DIRECTORY="infrastructure/terraform/modules/customer-project"
+            GCP_PROJECT_ID="caddi-us-c-${CUSTOMER_ID}-${ENVIRONMENT}"
             echo "Customer Project Detected"
           elif [[ $BRANCH_NAME =~ ^shared-([a-zA-Z0-9-]+)-([a-zA-Z0-9-]+)$ ]]; then
-            TFVARS_PROJECT_NAME="shared-infrastructure"
             ENVIRONMENT="${BASH_REMATCH[1]}"
+            TFVARS_PROJECT_NAME="shared-infrastructure"
             WORKING_DIRECTORY="infrastructure/terraform/modules/shared-infrastructure"
+            GCP_PROJECT_ID="caddi-us-inf-${ENVIRONMENT}"
             echo "Shared Infrastructure Project Detected"
           else
             echo "Error: Branch name does not match expected pattern."
@@ -94,46 +89,16 @@ jobs:
           echo "tfvars_project_name=$TFVARS_PROJECT_NAME" >> "$GITHUB_OUTPUT"
           echo "environment=$ENVIRONMENT" >> "$GITHUB_OUTPUT"
           echo "working_directory=$WORKING_DIRECTORY" >> "$GITHUB_OUTPUT"
+          echo "gcp_project_id=$GCP_PROJECT_ID" >> "$GITHUB_OUTPUT"
 
-  terraform:
+  call-terraform-workflow:
     needs: extract-branch-info
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v1
-        with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: 1.x.x
-
-      - name: Run tfsec
-        uses: aquasecurity/tfsec-action@v1.0.0
-        with:
-          working_directory: ${{ needs.extract-branch-info.outputs.working_directory }}
-          soft_fail: true
-
-      - name: Run tflint
-        uses: terraform-linters/tflint-action@v2.0.0
-        with:
-          working_directory: ${{ needs.extract-branch-info.outputs.working_directory }}
-          tflint_version: v0.50.0
-
-      - name: Terraform Format Check
-        working-directory: ${{ needs.extract-branch-info.outputs.working_directory }}
-        run: terraform fmt -check=true
-
-      - name: Terraform Validate
-        working-directory: ${{ needs.extract-branch-info.outputs.working_directory }}
-        run: terraform validate
-
-      - name: Terraform Plan
-        working-directory: ${{ needs.extract-branch-info.outputs.working_directory }}
-        run: |
-          terraform plan -no-color -var-file=../../environments/${{ needs.extract-branch-info.outputs.tfvars_project_name }}/${{ needs.extract-branch-info.outputs.environment }}/terraform.tfvars
+    uses: YOUR_GITHUB_USERNAME/team-workflows/.github/workflows/terraform.yml@main
+    with:
+      working_directory: ${{ needs.extract-branch-info.outputs.working_directory }}
+      environment: ${{ needs.extract-branch-info.outputs.environment }}
+      tfvars_project_name: ${{ needs.extract-branch-info.outputs.tfvars_project_name }}
+      gcp_project_id: ${{ needs.extract-branch-info.outputs.gcp_project_id }}
+    secrets:
+      GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
 ```

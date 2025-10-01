@@ -1,51 +1,33 @@
 name: Terraform Reusable Workflow
 
 on:
-  push:
-    branches:
-      - 'customer-*-*-*'
-      - 'shared-*-*'
+  workflow_call:
+    inputs:
+      working_directory:
+        description: 'The working directory to run Terraform commands from'
+        required: true
+        type: string
+      environment:
+        description: 'The environment to target (e.g., production, staging).'
+        required: true
+        type: string
+      tfvars_project_name:
+        description: 'The name of the project in the environments directory (e.g., customer-abc19a39).'
+        required: true
+        type: string
+      gcp_project_id:
+        description: 'The target Google Cloud Project ID (e.g., caddi-us-c-abc19a39-prd).'
+        required: true
+        type: string
+    secrets:
+      GCP_SA_KEY:
+        required: true
 
 jobs:
-  extract-branch-info:
-    runs-on: ubuntu-latest
-    outputs:
-      tfvars_project_name: ${{ steps.extract.outputs.tfvars_project_name }}
-      environment: ${{ steps.extract.outputs.environment }}
-      working_directory: ${{ steps.extract.outputs.working_directory }}
-    steps:
-      - name: Extract branch info
-        id: extract
-        run: |
-          BRANCH_NAME="${{ github.head_ref || github.ref_name }}"
-          echo "Branch Name: $BRANCH_NAME"
-
-          TFVARS_PROJECT_NAME=""
-          ENVIRONMENT=""
-          WORKING_DIRECTORY=""
-
-          if [[ $BRANCH_NAME =~ ^customer-([a-zA-Z0-9-]+)-([a-zA-Z0-9-]+)-([a-zA-Z0-9-]+)$ ]]; then
-            TFVARS_PROJECT_NAME="customer-${BASH_REMATCH[1]}"
-            ENVIRONMENT="${BASH_REMATCH[2]}"
-            WORKING_DIRECTORY="infrastructure/terraform/modules/customer-project"
-            echo "Customer Project Detected"
-          elif [[ $BRANCH_NAME =~ ^shared-([a-zA-Z0-9-]+)-([a-zA-Z0-9-]+)$ ]]; then
-            TFVARS_PROJECT_NAME="shared-infrastructure"
-            ENVIRONMENT="${BASH_REMATCH[1]}"
-            WORKING_DIRECTORY="infrastructure/terraform/modules/shared-infrastructure"
-            echo "Shared Infrastructure Project Detected"
-          else
-            echo "Error: Branch name does not match expected pattern."
-            exit 1
-          fi
-
-          echo "tfvars_project_name=$TFVARS_PROJECT_NAME" >> "$GITHUB_OUTPUT"
-          echo "environment=$ENVIRONMENT" >> "$GITHUB_OUTPUT"
-          echo "working_directory=$WORKING_DIRECTORY" >> "$GITHUB_OUTPUT"
-
   terraform:
-    needs: extract-branch-info
     runs-on: ubuntu-latest
+    env:
+      GOOGLE_CLOUD_PROJECT: ${{ inputs.gcp_project_id }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -63,24 +45,24 @@ jobs:
       - name: Run tfsec
         uses: aquasecurity/tfsec-action@v1.0.0
         with:
-          working_directory: ${{ needs.extract-branch-info.outputs.working_directory }}
+          working_directory: ${{ inputs.working_directory }}
           soft_fail: true # Allow tfsec to fail without failing the job
 
       - name: Run tflint
         uses: terraform-linters/tflint-action@v2.0.0
         with:
-          working_directory: ${{ needs.extract-branch-info.outputs.working_directory }}
+          working_directory: ${{ inputs.working_directory }}
           tflint_version: v0.50.0
 
       - name: Terraform Format Check
-        working-directory: ${{ needs.extract-branch-info.outputs.working_directory }}
+        working-directory: ${{ inputs.working_directory }}
         run: terraform fmt -check=true
 
       - name: Terraform Validate
-        working-directory: ${{ needs.extract-branch-info.outputs.working_directory }}
+        working-directory: ${{ inputs.working_directory }}
         run: terraform validate
 
       - name: Terraform Plan
-        working-directory: ${{ needs.extract-branch-info.outputs.working_directory }}
+        working-directory: ${{ inputs.working_directory }}
         run: |
-          terraform plan -no-color -var-file=../../environments/${{ needs.extract-branch-info.outputs.tfvars_project_name }}/${{ needs.extract-branch-info.outputs.environment }}/terraform.tfvars
+          terraform plan -no-color -var-file=../../environments/${{ inputs.tfvars_project_name }}/${{ inputs.environment }}/terraform.tfvars
