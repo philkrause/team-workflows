@@ -66,4 +66,4 @@ jobs:
       - name: Terraform Plan
         working-directory: ${{ inputs.working_directory }}
         run: |
-          terraform plan -no-color -var-file=../../projects/${{ inputs.tfvars_project_name }}/${{ inputs.environment }}/terraform.tfvars
+          terraform plan -no-color -var-file=./${{ inputs.environment }}/terraform.tfvars
