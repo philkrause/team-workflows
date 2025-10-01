@@ -48,11 +48,12 @@ jobs:
           working_directory: ${{ inputs.working_directory }}
           soft_fail: true # Allow tfsec to fail without failing the job
 
+      - name: Set up TFLint
+        uses: terraform-linters/setup-tflint@v3
+
       - name: Run tflint
-        uses: terraform-linters/tflint-action@v2.0.0
-        with:
-          working_directory: ${{ inputs.working_directory }}
-          tflint_version: v0.50.0
+        working-directory: ${{ inputs.working_directory }}
+        run: tflint --no-color
 
       - name: Terraform Format Check
         working-directory: ${{ inputs.working_directory }}

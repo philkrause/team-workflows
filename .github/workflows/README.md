@@ -40,65 +40,73 @@ To use this reusable workflow in another repository (e.g., your `terraform-monor
 Here's an example of a calling workflow:
 
 ```yaml
-name: Deploy Terraform Infrastructure
+name: Terraform Reusable Workflow
 
 on:
-  push:
-    branches:
-      - 'customer-*-*-*'
-      - 'shared-*-*'
+  workflow_call:
+    inputs:
+      working_directory:
+        description: 'The working directory to run Terraform commands from'
+        required: true
+        type: string
+      environment:
+        description: 'The environment to target (e.g., production, staging).'
+        required: true
+        type: string
+      tfvars_project_name:
+        description: 'The name of the project in the environments directory (e.g., customer-abc19a39).'
+        required: true
+        type: string
+      gcp_project_id:
+        description: 'The target Google Cloud Project ID (e.g., caddi-us-c-abc19a39-prd).'
+        required: true
+        type: string
+    secrets:
+      GCP_SA_KEY:
+        required: true
 
 jobs:
-  extract-branch-info:
+  terraform:
     runs-on: ubuntu-latest
-    outputs:
-      tfvars_project_name: ${{ steps.extract.outputs.tfvars_project_name }}
-      environment: ${{ steps.extract.outputs.environment }}
-      working_directory: ${{ steps.extract.outputs.working_directory }}
-      gcp_project_id: ${{ steps.extract.outputs.gcp_project_id }}
+    env:
+      GOOGLE_CLOUD_PROJECT: ${{ inputs.gcp_project_id }}
     steps:
-      - name: Extract branch info
-        id: extract
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v1
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.x.x
+
+      - name: Run tfsec
+        uses: aquasecurity/tfsec-action@v1.0.0
+        with:
+          working_directory: ${{ inputs.working_directory }}
+          soft_fail: true # Allow tfsec to fail without failing the job
+
+      - name: Set up TFLint
+        uses: terraform-linters/setup-tflint@v3
+
+      - name: Run tflint
+        working-directory: ${{ inputs.working_directory }}
+        run: tflint --no-color
+
+      - name: Terraform Format Check
+        working-directory: ${{ inputs.working_directory }}
+        run: terraform fmt -check=true
+
+      - name: Terraform Validate
+        working-directory: ${{ inputs.working_directory }}
+        run: terraform validate
+
+      - name: Terraform Plan
+        working-directory: ${{ inputs.working_directory }}
         run: |
-          BRANCH_NAME="${{ github.head_ref || github.ref_name }}"
-          echo "Branch Name: $BRANCH_NAME"
-
-          TFVARS_PROJECT_NAME=""
-          ENVIRONMENT=""
-          WORKING_DIRECTORY=""
-          GCP_PROJECT_ID=""
-
-          if [[ $BRANCH_NAME =~ ^customer-([a-zA-Z0-9-]+)-([a-zA-Z0-9-]+)-([a-zA-Z0-9-]+)$ ]]; then
-            CUSTOMER_ID="${BASH_REMATCH[1]}"
-            ENVIRONMENT="${BASH_REMATCH[2]}"
-            TFVARS_PROJECT_NAME="customer-$CUSTOMER_ID"
-            WORKING_DIRECTORY="infrastructure/terraform/modules/customer-project"
-            GCP_PROJECT_ID="caddi-us-c-${CUSTOMER_ID}-${ENVIRONMENT}"
-            echo "Customer Project Detected"
-          elif [[ $BRANCH_NAME =~ ^shared-([a-zA-Z0-9-]+)-([a-zA-Z0-9-]+)$ ]]; then
-            ENVIRONMENT="${BASH_REMATCH[1]}"
-            TFVARS_PROJECT_NAME="shared-infrastructure"
-            WORKING_DIRECTORY="infrastructure/terraform/modules/shared-infrastructure"
-            GCP_PROJECT_ID="caddi-us-inf-${ENVIRONMENT}"
-            echo "Shared Infrastructure Project Detected"
-          else
-            echo "Error: Branch name does not match expected pattern."
-            exit 1
-          fi
-
-          echo "tfvars_project_name=$TFVARS_PROJECT_NAME" >> "$GITHUB_OUTPUT"
-          echo "environment=$ENVIRONMENT" >> "$GITHUB_OUTPUT"
-          echo "working_directory=$WORKING_DIRECTORY" >> "$GITHUB_OUTPUT"
-          echo "gcp_project_id=$GCP_PROJECT_ID" >> "$GITHUB_OUTPUT"
-
-  call-terraform-workflow:
-    needs: extract-branch-info
-    uses: YOUR_GITHUB_USERNAME/team-workflows/.github/workflows/terraform.yml@main
-    with:
-      working_directory: ${{ needs.extract-branch-info.outputs.working_directory }}
-      environment: ${{ needs.extract-branch-info.outputs.environment }}
-      tfvars_project_name: ${{ needs.extract-branch-info.outputs.tfvars_project_name }}
-      gcp_project_id: ${{ needs.extract-branch-info.outputs.gcp_project_id }}
-    secrets:
-      GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+          terraform plan -no-color -var-file=../../environments/${{ inputs.tfvars_project_name }}/${{ inputs.environment }}/terraform.tfvars
 ```
