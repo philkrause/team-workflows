@@ -1,0 +1,62 @@
+name: Terraform Reusable Workflow
+
+on:
+  workflow_call:
+    inputs:
+      working_directory:
+        description: 'The working directory to run Terraform commands from'
+        required: true
+        type: string
+      environment:
+        description: 'The environment to target (e.g., production, staging)'
+        required: true
+        type: string
+      tfvars_project_name:
+        description: 'The name of the project in the environments directory (e.g., customer-abc19a39)'
+        required: true
+        type: string
+    secrets:
+      GCP_SA_KEY:
+        required: true
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v1
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.x.x
+
+      - name: Run tfsec
+        uses: aquasecurity/tfsec-action@v1.0.0
+        with:
+          working_directory: ${{ inputs.working_directory }}
+          soft_fail: true # Allow tfsec to fail without failing the job
+
+      - name: Run tflint
+        uses: terraform-linters/tflint-action@v2.0.0
+        with:
+          working_directory: ${{ inputs.working_directory }}
+          tflint_version: v0.50.0
+
+      - name: Terraform Format Check
+        working-directory: ${{ inputs.working_directory }}
+        run: terraform fmt -check=true
+
+      - name: Terraform Validate
+        working-directory: ${{ inputs.working_directory }}
+        run: terraform validate
+
+      - name: Terraform Plan
+        working-directory: ${{ inputs.working_directory }}
+        run: |
+          terraform plan -no-color -var-file=../../environments/${{ inputs.tfvars_project_name }}/${{ inputs.environment }}/terraform.tfvars
